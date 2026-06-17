@@ -1,52 +1,54 @@
 # Obsidian Image Viewer
 
-Плагин открывает изображения из заметки в полноэкранном просмотрщике на всё окно Obsidian: достаточно щёлкнуть по картинке.
+*English · [Русский](README.ru.md)*
 
-## Возможности
+Click an image in a note to open it in a full-window viewer that fills the whole Obsidian window.
 
-- **Полноэкранный просмотр** — изображение автоматически масштабируется под размер окна.
-- **Галерея миниатюр** внизу — все картинки текущей заметки в один горизонтальный ряд, одинакового размера. Активная подсвечивается, клик переключает на неё.
-- **Навигация стрелками** `←` / `→` — предыдущая / следующая картинка.
-- **Зум колесом мыши** — масштабирование к точке под курсором; можно уменьшать ниже размера «вписать».
-- **Перетаскивание** мышью при увеличении (pan).
-- **Двойной клик** — переключение между «вписать» и 2×.
-- **Esc** или клик по тёмному фону — закрыть. `+` / `-` / `0` — зум с клавиатуры.
+## Features
 
-## Настройки
+- **Full-window viewing** — the image is scaled automatically to fit the window.
+- **Thumbnail gallery** at the bottom — every image in the current note in a single horizontal row of uniform size. The active one is highlighted; click to switch.
+- **Arrow-key navigation** `←` / `→` — previous / next image.
+- **Mouse-wheel zoom** — zooms toward the cursor; you can also shrink below the fitted size.
+- **Drag to pan** when the image is zoomed in.
+- **Double click** — toggle between the default zoom and 2×.
+- **Esc** or a click on the dark backdrop closes the viewer. `+` / `-` / `0` zoom from the keyboard.
 
-Доступны в **Настройки → Community plugins → Image Viewer**:
+## Settings
 
-| Опция | Описание |
+Available in **Settings → Community plugins → Image Viewer**:
+
+| Option | Description |
 |---|---|
-| **Show thumbnail gallery** | показ/скрытие нижней галереи миниатюр |
-| **Thumbnail height** | высота миниатюр (40–160 px); ширина подстраивается под ориентацию |
-| **Thumbnail orientation** | форма миниатюр: альбомная / портретная / квадратная |
-| **Center thumbnail gallery** | центрировать галерею, когда она помещается (иначе — слева с прокруткой) |
-| **Show navigation arrows** | показ/скрытие стрелок ‹ › (стрелки клавиатуры работают всегда) |
-| **Show file name** | показывать имя текущего файла в верхней панели (по центру) |
-| **Mouse wheel** | режим колеса: *Zoom* — колесо масштабирует, листание стрелками; *Navigate* — колесо листает, масштаб на Ctrl/Cmd+колесо |
-| **Default zoom** | масштаб при открытии: *вписать без увеличения* (по умолчанию), *вписать с увеличением*, *по высоте*, *по ширине*, *100%* |
-| **Keep zoom between images** | сохранять уровень зума и позицию при переключении картинок |
-| **Loop navigation** | переход с последней картинки на первую и наоборот |
-| **Close on backdrop click** | закрывать кликом по тёмному фону (при включении крестик скрывается) |
-| **Backdrop opacity** | затемнение фона (0.5–1.0) |
-| **Minimum zoom** | нижний предел зума (< 1.0 позволяет уменьшать ниже «вписать») |
-| **Maximum zoom** | верхний предел зума (× размера «вписать») |
-| **Zoom step** | чувствительность колеса — насколько масштабирует один щелчок |
+| **Show thumbnail gallery** | show/hide the bottom thumbnail strip |
+| **Thumbnail height** | thumbnail height (40–160 px); width follows the orientation |
+| **Thumbnail orientation** | thumbnail shape: landscape / portrait / square |
+| **Center thumbnail gallery** | center the gallery when it fits (otherwise left-aligned and scrollable) |
+| **Show navigation arrows** | show/hide the ‹ › arrows (arrow keys always work) |
+| **Show file name** | show the current file name in the top bar (centered) |
+| **Mouse wheel** | wheel mode: *Zoom* — wheel zooms, arrows navigate; *Navigate* — wheel navigates, Ctrl/Cmd+wheel zooms |
+| **Default zoom** | zoom on open: *fit without upscaling* (default), *fit with upscaling*, *fill height*, *fill width*, *100%* |
+| **Keep zoom between images** | preserve zoom level and position when switching images |
+| **Loop navigation** | wrap around from the last image to the first and vice versa |
+| **Close on backdrop click** | close by clicking the dark backdrop (the close button is hidden when enabled) |
+| **Backdrop opacity** | how dark the background is (0.5–1.0) |
+| **Minimum zoom** | lower zoom limit (< 1.0 lets you shrink below the default size) |
+| **Maximum zoom** | upper zoom limit (× the default size) |
+| **Zoom step** | wheel sensitivity — how much one notch zooms |
 
-Настройки сохраняются в `data.json` плагина и применяются при следующем открытии просмотрщика.
+Settings are stored in the plugin's `data.json` and applied the next time the viewer opens.
 
-## Сборка
+## Build
 
 ```bash
 npm install
-npm run build      # производит main.js
-npm run deploy     # сборка + копирование в dev_vault для теста
+npm run build      # produces main.js
+npm run deploy     # build + copy into dev_vault for testing
 ```
 
-Для разработки: `npm run dev` (watch-сборка), затем вручную `./deploy.ps1`.
+For development: `npm run dev` (watch build), then run `./deploy.ps1` manually.
 
-## Установка вручную
+## Manual installation
 
-Скопируйте `main.js`, `manifest.json` и `styles.css` в
-`<vault>/.obsidian/plugins/image-viewer/` и включите плагин в настройках Obsidian.
+Copy `main.js`, `manifest.json` and `styles.css` into
+`<vault>/.obsidian/plugins/image-viewer/` and enable the plugin in Obsidian's settings.
