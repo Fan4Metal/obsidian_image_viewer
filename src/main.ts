@@ -1,0 +1,619 @@
+import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
+
+interface ImageItem {
+	src: string;
+	alt: string;
+}
+
+type ThumbnailOrientation = 'landscape' | 'portrait' | 'square';
+type WheelMode = 'zoom' | 'navigate';
+
+interface ImageViewerSettings {
+	showThumbnails: boolean;
+	thumbnailHeight: number;
+	thumbnailOrientation: ThumbnailOrientation;
+	centerThumbnails: boolean;
+	showArrows: boolean;
+	wheelMode: WheelMode;
+	backdropOpacity: number;
+	minZoom: number;
+	maxZoom: number;
+	zoomStep: number;
+	keepZoom: boolean;
+	loop: boolean;
+	closeOnBackdropClick: boolean;
+}
+
+const DEFAULT_SETTINGS: ImageViewerSettings = {
+	showThumbnails: true,
+	thumbnailHeight: 64,
+	thumbnailOrientation: 'landscape',
+	centerThumbnails: false,
+	showArrows: true,
+	wheelMode: 'zoom',
+	backdropOpacity: 0.92,
+	minZoom: 0.2,
+	maxZoom: 12,
+	zoomStep: 1.15,
+	keepZoom: false,
+	loop: true,
+	closeOnBackdropClick: true,
+};
+
+// The image is "fitted" at scale 1; below that it shrinks, above it enlarges.
+const FIT_SCALE = 1;
+// Thumbnails keep a fixed ~4:3 aspect so they all look uniform.
+const THUMB_ASPECT = 84 / 64;
+
+export default class ImageViewerPlugin extends Plugin {
+	settings: ImageViewerSettings = DEFAULT_SETTINGS;
+	private viewer: ImageViewer | null = null;
+
+	async onload(): Promise<void> {
+		await this.loadSettings();
+		this.addSettingTab(new ImageViewerSettingTab(this.app, this));
+
+		// Capture phase so we intercept the click before the editor/preview handles it.
+		this.registerDomEvent(document, 'click', this.handleClick, { capture: true });
+	}
+
+	onunload(): void {
+		this.viewer?.close();
+		this.viewer = null;
+	}
+
+	async loadSettings(): Promise<void> {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+	}
+
+	private handleClick = (evt: MouseEvent): void => {
+		const target = evt.target;
+		if (!(target instanceof HTMLImageElement)) return;
+
+		// Never react to clicks inside our own overlay.
+		if (target.closest('.image-viewer-overlay')) return;
+
+		// Only handle images rendered inside a note/view.
+		const container = target.closest('.view-content');
+		if (!container) return;
+
+		const images = Array.from(container.querySelectorAll('img')).filter(
+			(img) => !!(img.currentSrc || img.src),
+		);
+		if (images.length === 0) return;
+
+		const index = images.indexOf(target);
+		if (index < 0) return;
+
+		evt.preventDefault();
+		evt.stopPropagation();
+
+		const items: ImageItem[] = images.map((img) => ({
+			src: img.currentSrc || img.src,
+			alt: img.alt || '',
+		}));
+
+		this.openViewer(items, index);
+	};
+
+	private openViewer(items: ImageItem[], index: number): void {
+		this.viewer?.close();
+		this.viewer = new ImageViewer(items, index, this.settings, () => {
+			this.viewer = null;
+		});
+		this.viewer.open();
+	}
+}
+
+class ImageViewer {
+	private readonly items: ImageItem[];
+	private index: number;
+	private readonly settings: ImageViewerSettings;
+	private readonly onClose: () => void;
+
+	private overlay: HTMLElement | null = null;
+	private stage!: HTMLElement;
+	private mainImg!: HTMLImageElement;
+	private thumbStrip!: HTMLElement;
+	private counterEl!: HTMLElement;
+	private prevBtn!: HTMLButtonElement;
+	private nextBtn!: HTMLButtonElement;
+	private readonly thumbs: HTMLElement[] = [];
+
+	// Zoom / pan state for the current image.
+	private scale = 1;
+	private tx = 0;
+	private ty = 0;
+
+	// Accumulates wheel delta so one "notch" advances one image (trackpad-friendly).
+	private wheelAccum = 0;
+
+	private isPanning = false;
+	private panStartX = 0;
+	private panStartY = 0;
+	private panOriginX = 0;
+	private panOriginY = 0;
+	private moved = false;
+
+	private closed = false;
+
+	constructor(
+		items: ImageItem[],
+		index: number,
+		settings: ImageViewerSettings,
+		onClose: () => void,
+	) {
+		this.items = items;
+		this.index = index;
+		this.settings = settings;
+		this.onClose = onClose;
+	}
+
+	open(): void {
+		const overlay = document.body.createDiv({ cls: 'image-viewer-overlay' });
+		this.overlay = overlay;
+
+		// Apply settings that affect layout via inline styles / CSS variables.
+		overlay.style.backgroundColor = `rgba(0, 0, 0, ${this.settings.backdropOpacity})`;
+		const thumbHeight = this.settings.thumbnailHeight;
+		let thumbWidth: number;
+		switch (this.settings.thumbnailOrientation) {
+			case 'portrait':
+				thumbWidth = Math.round(thumbHeight / THUMB_ASPECT);
+				break;
+			case 'square':
+				thumbWidth = thumbHeight;
+				break;
+			default:
+				thumbWidth = Math.round(thumbHeight * THUMB_ASPECT);
+		}
+		overlay.style.setProperty('--iv-thumb-h', `${thumbHeight}px`);
+		overlay.style.setProperty('--iv-thumb-w', `${thumbWidth}px`);
+
+		const multiple = this.items.length > 1;
+		const showArrows = this.settings.showArrows && multiple;
+		const showThumbs = this.settings.showThumbnails && multiple;
+		if (!showArrows) overlay.addClass('image-viewer-no-arrows');
+		if (!showThumbs) overlay.addClass('image-viewer-no-thumbs');
+		if (this.settings.centerThumbnails) overlay.addClass('image-viewer-center-thumbs');
+
+		// Top bar: counter + close button.
+		const topbar = overlay.createDiv({ cls: 'image-viewer-topbar' });
+		this.counterEl = topbar.createDiv({ cls: 'image-viewer-counter' });
+		const closeBtn = topbar.createEl('button', {
+			cls: 'image-viewer-btn image-viewer-close',
+			text: '✕',
+			attr: { 'aria-label': 'Close (Esc)' },
+		});
+		closeBtn.addEventListener('click', () => this.close());
+		// The backdrop already closes the viewer, so the cross is redundant.
+		if (this.settings.closeOnBackdropClick) closeBtn.hide();
+
+		// Stage holds the main image + nav arrows.
+		this.stage = overlay.createDiv({ cls: 'image-viewer-stage' });
+		this.mainImg = this.stage.createEl('img', { cls: 'image-viewer-main' });
+		this.mainImg.draggable = false;
+
+		this.prevBtn = this.stage.createEl('button', {
+			cls: 'image-viewer-btn image-viewer-nav image-viewer-prev',
+			text: '‹',
+			attr: { 'aria-label': 'Previous (←)' },
+		});
+		this.nextBtn = this.stage.createEl('button', {
+			cls: 'image-viewer-btn image-viewer-nav image-viewer-next',
+			text: '›',
+			attr: { 'aria-label': 'Next (→)' },
+		});
+		this.prevBtn.addEventListener('click', (e) => {
+			e.stopPropagation();
+			this.prev();
+		});
+		this.nextBtn.addEventListener('click', (e) => {
+			e.stopPropagation();
+			this.next();
+		});
+
+		// Bottom thumbnail gallery.
+		this.thumbStrip = overlay.createDiv({ cls: 'image-viewer-thumbnails' });
+		this.items.forEach((item, i) => {
+			const thumb = this.thumbStrip.createDiv({ cls: 'image-viewer-thumb' });
+			const img = thumb.createEl('img', { attr: { src: item.src, alt: item.alt } });
+			img.draggable = false;
+			thumb.addEventListener('click', (e) => {
+				e.stopPropagation();
+				this.goTo(i);
+			});
+			this.thumbs.push(thumb);
+		});
+
+		this.registerEvents();
+		this.showCurrent();
+	}
+
+	close(): void {
+		if (this.closed) return;
+		this.closed = true;
+
+		document.removeEventListener('keydown', this.onKeyDown, true);
+		document.removeEventListener('mousemove', this.onMouseMove);
+		document.removeEventListener('mouseup', this.onMouseUp);
+
+		this.overlay?.remove();
+		this.overlay = null;
+		this.onClose();
+	}
+
+	private registerEvents(): void {
+		document.addEventListener('keydown', this.onKeyDown, true);
+		document.addEventListener('mousemove', this.onMouseMove);
+		document.addEventListener('mouseup', this.onMouseUp);
+
+		this.stage.addEventListener('wheel', this.onWheel, { passive: false });
+		this.stage.addEventListener('mousedown', this.onMouseDown);
+
+		// Click on the dark backdrop (not the image / buttons) closes the viewer.
+		this.stage.addEventListener('click', (e) => {
+			if (!this.settings.closeOnBackdropClick) return;
+			if (e.target === this.stage && !this.moved) this.close();
+		});
+
+		// Double click toggles between fit and 2x zoom.
+		this.mainImg.addEventListener('dblclick', (e) => {
+			e.preventDefault();
+			if (this.scale !== FIT_SCALE) this.resetZoom();
+			else this.applyZoom(2, 0, 0);
+		});
+
+		// Vertical wheel over the strip scrolls it horizontally.
+		this.thumbStrip.addEventListener(
+			'wheel',
+			(e) => {
+				if (e.deltaY === 0) return;
+				e.preventDefault();
+				this.thumbStrip.scrollLeft += e.deltaY;
+			},
+			{ passive: false },
+		);
+	}
+
+	private onKeyDown = (e: KeyboardEvent): void => {
+		switch (e.key) {
+			case 'Escape':
+				e.preventDefault();
+				this.close();
+				break;
+			case 'ArrowRight':
+				e.preventDefault();
+				this.next();
+				break;
+			case 'ArrowLeft':
+				e.preventDefault();
+				this.prev();
+				break;
+			case '+':
+			case '=':
+				e.preventDefault();
+				this.applyZoom(this.settings.zoomStep, 0, 0);
+				break;
+			case '-':
+			case '_':
+				e.preventDefault();
+				this.applyZoom(1 / this.settings.zoomStep, 0, 0);
+				break;
+			case '0':
+				e.preventDefault();
+				this.resetZoom();
+				break;
+		}
+	};
+
+	private onWheel = (e: WheelEvent): void => {
+		e.preventDefault();
+
+		// In 'navigate' mode plain wheel flips images and Ctrl/Cmd+wheel zooms;
+		// in 'zoom' mode the wheel always zooms.
+		const navigateMode = this.settings.wheelMode === 'navigate';
+		const doZoom = navigateMode ? e.ctrlKey || e.metaKey : true;
+
+		if (doZoom) {
+			const rect = this.stage.getBoundingClientRect();
+			const mx = e.clientX - rect.left - rect.width / 2;
+			const my = e.clientY - rect.top - rect.height / 2;
+			const factor = e.deltaY < 0 ? this.settings.zoomStep : 1 / this.settings.zoomStep;
+			this.applyZoom(factor, mx, my);
+			return;
+		}
+
+		// Navigate: accumulate delta and step once per threshold crossing.
+		if (Math.sign(e.deltaY) !== Math.sign(this.wheelAccum)) this.wheelAccum = 0;
+		this.wheelAccum += e.deltaY;
+		const THRESHOLD = 50;
+		if (this.wheelAccum >= THRESHOLD) {
+			this.wheelAccum = 0;
+			this.next();
+		} else if (this.wheelAccum <= -THRESHOLD) {
+			this.wheelAccum = 0;
+			this.prev();
+		}
+	};
+
+	private onMouseDown = (e: MouseEvent): void => {
+		if (e.button !== 0) return;
+		this.isPanning = true;
+		this.moved = false;
+		this.panStartX = e.clientX;
+		this.panStartY = e.clientY;
+		this.panOriginX = this.tx;
+		this.panOriginY = this.ty;
+	};
+
+	private onMouseMove = (e: MouseEvent): void => {
+		if (!this.isPanning) return;
+		const dx = e.clientX - this.panStartX;
+		const dy = e.clientY - this.panStartY;
+		if (Math.abs(dx) > 3 || Math.abs(dy) > 3) this.moved = true;
+		if (this.scale > FIT_SCALE) {
+			this.tx = this.panOriginX + dx;
+			this.ty = this.panOriginY + dy;
+			this.updateTransform();
+		}
+	};
+
+	private onMouseUp = (): void => {
+		this.isPanning = false;
+	};
+
+	private applyZoom(factor: number, mx: number, my: number): void {
+		const newScale = clamp(this.scale * factor, this.settings.minZoom, this.settings.maxZoom);
+		const ratio = newScale / this.scale;
+		// Keep the point under the cursor fixed while zooming.
+		this.tx = mx - (mx - this.tx) * ratio;
+		this.ty = my - (my - this.ty) * ratio;
+		this.scale = newScale;
+		// At or below the fitted size the image stays centered (no panning needed).
+		if (this.scale <= FIT_SCALE) {
+			this.tx = 0;
+			this.ty = 0;
+		}
+		this.updateTransform();
+	}
+
+	private resetZoom(): void {
+		this.scale = 1;
+		this.tx = 0;
+		this.ty = 0;
+		this.updateTransform();
+	}
+
+	private updateTransform(): void {
+		this.mainImg.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
+		this.mainImg.toggleClass('is-zoomed', this.scale > FIT_SCALE);
+	}
+
+	private goTo(index: number): void {
+		const count = this.items.length;
+		if (this.settings.loop) {
+			this.index = ((index % count) + count) % count;
+		} else {
+			this.index = clamp(index, 0, count - 1);
+		}
+		this.showCurrent();
+	}
+
+	private next(): void {
+		this.goTo(this.index + 1);
+	}
+
+	private prev(): void {
+		this.goTo(this.index - 1);
+	}
+
+	private showCurrent(): void {
+		const item = this.items[this.index];
+		if (!item) return;
+
+		// Keep the current zoom/pan across images when requested.
+		if (this.settings.keepZoom) this.updateTransform();
+		else this.resetZoom();
+		this.mainImg.src = item.src;
+		this.mainImg.alt = item.alt;
+		this.counterEl.setText(`${this.index + 1} / ${this.items.length}`);
+
+		// Without looping, disable the arrows at the ends.
+		if (!this.settings.loop) {
+			this.prevBtn.disabled = this.index === 0;
+			this.nextBtn.disabled = this.index === this.items.length - 1;
+		}
+
+		this.thumbs.forEach((thumb, i) => thumb.toggleClass('is-active', i === this.index));
+		this.thumbs[this.index]?.scrollIntoView({
+			inline: 'center',
+			block: 'nearest',
+			behavior: 'smooth',
+		});
+	}
+}
+
+class ImageViewerSettingTab extends PluginSettingTab {
+	private readonly plugin: ImageViewerPlugin;
+
+	constructor(app: App, plugin: ImageViewerPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName('Show thumbnail gallery')
+			.setDesc('Display the horizontal strip of thumbnails at the bottom.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.showThumbnails).onChange(async (value) => {
+					this.plugin.settings.showThumbnails = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Thumbnail height')
+			.setDesc('Height of each thumbnail in pixels (width scales to keep them uniform).')
+			.addSlider((slider) =>
+				slider
+					.setLimits(40, 160, 4)
+					.setValue(this.plugin.settings.thumbnailHeight)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.thumbnailHeight = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Thumbnail orientation')
+			.setDesc('Shape of the thumbnails: landscape (wide), portrait (tall) or square.')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption('landscape', 'Landscape')
+					.addOption('portrait', 'Portrait')
+					.addOption('square', 'Square')
+					.setValue(this.plugin.settings.thumbnailOrientation)
+					.onChange(async (value) => {
+						this.plugin.settings.thumbnailOrientation = value as ThumbnailOrientation;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Center thumbnail gallery')
+			.setDesc('Center the thumbnails when they fit; otherwise they stay left-aligned and scroll.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.centerThumbnails).onChange(async (value) => {
+					this.plugin.settings.centerThumbnails = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Show navigation arrows')
+			.setDesc('Display the ‹ › arrows over the image (arrow keys always work).')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.showArrows).onChange(async (value) => {
+					this.plugin.settings.showArrows = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Mouse wheel')
+			.setDesc(
+				'How the scroll wheel behaves inside the viewer. ' +
+					'Arrow keys always navigate regardless of this setting.',
+			)
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption('zoom', 'Zoom (arrows navigate)')
+					.addOption('navigate', 'Navigate (Ctrl+wheel zooms)')
+					.setValue(this.plugin.settings.wheelMode)
+					.onChange(async (value) => {
+						this.plugin.settings.wheelMode = value as WheelMode;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Keep zoom between images')
+			.setDesc('Preserve the current zoom level and position when switching images.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.keepZoom).onChange(async (value) => {
+					this.plugin.settings.keepZoom = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Loop navigation')
+			.setDesc('Wrap around from the last image to the first and vice versa.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.loop).onChange(async (value) => {
+					this.plugin.settings.loop = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Close on backdrop click')
+			.setDesc('Click the dark area around the image to close the viewer.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.closeOnBackdropClick).onChange(async (value) => {
+					this.plugin.settings.closeOnBackdropClick = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Backdrop opacity')
+			.setDesc('How dark the background behind the image is.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(0.5, 1, 0.02)
+					.setValue(this.plugin.settings.backdropOpacity)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.backdropOpacity = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Minimum zoom')
+			.setDesc('Lower limit for zoom — values below 1.0 let you shrink below the fitted size.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(0.1, 1, 0.05)
+					.setValue(this.plugin.settings.minZoom)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.minZoom = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Maximum zoom')
+			.setDesc('Upper limit for mouse-wheel zoom (× the fitted size).')
+			.addSlider((slider) =>
+				slider
+					.setLimits(2, 20, 1)
+					.setValue(this.plugin.settings.maxZoom)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.maxZoom = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Zoom step')
+			.setDesc('Wheel sensitivity — how much each notch zooms.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(1.05, 1.5, 0.05)
+					.setValue(this.plugin.settings.zoomStep)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.zoomStep = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+	}
+}
+
+function clamp(value: number, min: number, max: number): number {
+	return Math.min(max, Math.max(min, value));
+}

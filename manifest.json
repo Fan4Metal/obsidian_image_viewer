@@ -1,0 +1,9 @@
+{
+	"id": "image-viewer",
+	"name": "Image Viewer",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "Click an image to open a full-window viewer with a thumbnail gallery, arrow-key navigation and mouse-wheel zoom.",
+	"author": "Fan4_Metal",
+	"isDesktopOnly": false
+}

@@ -1,0 +1,164 @@
+.image-viewer-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 9999;
+	display: flex;
+	flex-direction: column;
+	background-color: rgba(0, 0, 0, 0.92);
+	user-select: none;
+}
+
+/* ---- Top bar ---- */
+.image-viewer-topbar {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 14px;
+}
+
+.image-viewer-counter {
+	margin-right: auto;
+	color: #fff;
+	opacity: 0.85;
+	font-size: 14px;
+	font-variant-numeric: tabular-nums;
+}
+
+/* ---- Buttons ---- */
+.image-viewer-btn {
+	background: rgba(255, 255, 255, 0.08);
+	color: #fff;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	box-shadow: none;
+	transition: background 0.15s ease;
+}
+
+.image-viewer-btn:hover {
+	background: rgba(255, 255, 255, 0.22);
+}
+
+.image-viewer-close {
+	width: 36px;
+	height: 36px;
+	font-size: 18px;
+	line-height: 1;
+}
+
+/* ---- Stage / main image ---- */
+.image-viewer-stage {
+	position: relative;
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+}
+
+.image-viewer-main {
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: contain;
+	transform-origin: center center;
+	cursor: zoom-in;
+	will-change: transform;
+	-webkit-user-drag: none;
+}
+
+.image-viewer-main.is-zoomed {
+	cursor: grab;
+}
+
+.image-viewer-main.is-zoomed:active {
+	cursor: grabbing;
+}
+
+/* ---- Navigation arrows ---- */
+.image-viewer-nav {
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 48px;
+	height: 64px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 34px;
+	line-height: 1;
+	z-index: 2;
+}
+
+.image-viewer-prev {
+	left: 16px;
+}
+
+.image-viewer-next {
+	right: 16px;
+}
+
+/* ---- Thumbnail gallery ---- */
+.image-viewer-thumbnails {
+	flex: 0 0 auto;
+	display: flex;
+	gap: 8px;
+	padding: 10px 14px;
+	overflow-x: auto;
+	overflow-y: hidden;
+	scrollbar-width: thin;
+}
+
+.image-viewer-thumb {
+	flex: 0 0 auto;
+	width: var(--iv-thumb-w, 84px);
+	height: var(--iv-thumb-h, 64px);
+	border-radius: 6px;
+	overflow: hidden;
+	cursor: pointer;
+	opacity: 0.55;
+	border: 2px solid transparent;
+	background: rgba(255, 255, 255, 0.05);
+	transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.image-viewer-thumb:hover {
+	opacity: 0.85;
+}
+
+.image-viewer-thumb.is-active {
+	opacity: 1;
+	border-color: var(--interactive-accent, #7c6cff);
+}
+
+.image-viewer-thumb img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
+}
+
+/* ---- Disabled nav arrows (when looping is off, at the ends) ---- */
+.image-viewer-nav:disabled {
+	opacity: 0.25;
+	cursor: default;
+}
+
+.image-viewer-nav:disabled:hover {
+	background: rgba(255, 255, 255, 0.08);
+}
+
+/* ---- Hide arrows / gallery (single image or via settings) ---- */
+.image-viewer-no-arrows .image-viewer-nav {
+	display: none;
+}
+
+.image-viewer-no-thumbs .image-viewer-thumbnails {
+	display: none;
+}
+
+/* ---- Centered gallery (falls back to start when it overflows) ---- */
+.image-viewer-center-thumbs .image-viewer-thumbnails {
+	justify-content: safe center;
+}

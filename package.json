@@ -1,0 +1,20 @@
+{
+	"name": "obsidian-image-viewer",
+	"version": "1.0.0",
+	"description": "Full-window image viewer for Obsidian with thumbnail gallery, arrow-key navigation and mouse-wheel zoom.",
+	"main": "main.js",
+	"type": "module",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"deploy": "node esbuild.config.mjs production && powershell -ExecutionPolicy Bypass -File ./deploy.ps1"
+	},
+	"keywords": ["obsidian", "plugin", "image", "viewer", "gallery"],
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^22.15.17",
+		"esbuild": "0.25.5",
+		"obsidian": "latest",
+		"typescript": "^5.8.3"
+	}
+}
