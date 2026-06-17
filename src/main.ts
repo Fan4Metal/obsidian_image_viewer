@@ -3,6 +3,7 @@ import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
 interface ImageItem {
 	src: string;
 	alt: string;
+	name: string;
 }
 
 type ThumbnailOrientation = 'landscape' | 'portrait' | 'square';
@@ -22,6 +23,7 @@ interface ImageViewerSettings {
 	thumbnailOrientation: ThumbnailOrientation;
 	centerThumbnails: boolean;
 	showArrows: boolean;
+	showFilename: boolean;
 	wheelMode: WheelMode;
 	defaultZoom: DefaultZoom;
 	backdropOpacity: number;
@@ -39,6 +41,7 @@ const DEFAULT_SETTINGS: ImageViewerSettings = {
 	thumbnailOrientation: 'landscape',
 	centerThumbnails: false,
 	showArrows: true,
+	showFilename: true,
 	wheelMode: 'zoom',
 	defaultZoom: 'fit-down',
 	backdropOpacity: 0.92,
@@ -100,10 +103,11 @@ export default class ImageViewerPlugin extends Plugin {
 		evt.preventDefault();
 		evt.stopPropagation();
 
-		const items: ImageItem[] = images.map((img) => ({
-			src: img.currentSrc || img.src,
-			alt: img.alt || '',
-		}));
+		const items: ImageItem[] = images.map((img) => {
+			const src = img.currentSrc || img.src;
+			const alt = img.alt || '';
+			return { src, alt, name: fileNameFromSrc(src, alt) };
+		});
 
 		this.openViewer(items, index);
 	};
@@ -128,6 +132,7 @@ class ImageViewer {
 	private mainImg!: HTMLImageElement;
 	private thumbStrip!: HTMLElement;
 	private counterEl!: HTMLElement;
+	private nameEl!: HTMLElement;
 	private prevBtn!: HTMLButtonElement;
 	private nextBtn!: HTMLButtonElement;
 	private readonly thumbs: HTMLElement[] = [];
@@ -197,6 +202,8 @@ class ImageViewer {
 		// Top bar: counter + close button.
 		const topbar = overlay.createDiv({ cls: 'image-viewer-topbar' });
 		this.counterEl = topbar.createDiv({ cls: 'image-viewer-counter' });
+		this.nameEl = topbar.createDiv({ cls: 'image-viewer-filename' });
+		if (!this.settings.showFilename) this.nameEl.hide();
 		const closeBtn = topbar.createEl('button', {
 			cls: 'image-viewer-btn image-viewer-close',
 			text: '✕',
@@ -491,6 +498,8 @@ class ImageViewer {
 		this.mainImg.alt = item.alt;
 		this.mainImg.src = item.src;
 		this.counterEl.setText(`${this.index + 1} / ${this.items.length}`);
+		this.nameEl.setText(item.name);
+		this.nameEl.setAttr('title', item.name);
 		// Cached images may not fire 'load', so apply the default zoom right away.
 		if (this.mainImg.complete && this.mainImg.naturalWidth) this.onImageLoad();
 
@@ -576,6 +585,16 @@ class ImageViewerSettingTab extends PluginSettingTab {
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.showArrows).onChange(async (value) => {
 					this.plugin.settings.showArrows = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Show file name')
+			.setDesc('Show the current image file name in the top bar.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.showFilename).onChange(async (value) => {
+					this.plugin.settings.showFilename = value;
 					await this.plugin.saveSettings();
 				}),
 			);
@@ -704,4 +723,16 @@ class ImageViewerSettingTab extends PluginSettingTab {
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
+}
+
+// Derive a human-readable file name from an image URL, falling back to alt text.
+function fileNameFromSrc(src: string, fallback: string): string {
+	try {
+		const path = src.split(/[?#]/)[0];
+		const segment = path.substring(path.lastIndexOf('/') + 1);
+		const name = decodeURIComponent(segment);
+		return name || fallback;
+	} catch {
+		return fallback;
+	}
 }

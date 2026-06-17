@@ -10,6 +10,7 @@
 
 /* ---- Top bar ---- */
 .image-viewer-topbar {
+	position: relative;
 	flex: 0 0 auto;
 	display: flex;
 	align-items: center;
@@ -23,6 +24,21 @@
 	opacity: 0.85;
 	font-size: 14px;
 	font-variant-numeric: tabular-nums;
+}
+
+/* Centered in the whole bar, independent of the counter / close button. */
+.image-viewer-filename {
+	position: absolute;
+	left: 50%;
+	transform: translateX(-50%);
+	max-width: 60%;
+	color: #fff;
+	opacity: 0.85;
+	font-size: 14px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	pointer-events: none;
 }
 
 /* ---- Buttons ---- */
