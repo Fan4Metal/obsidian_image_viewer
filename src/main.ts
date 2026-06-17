@@ -8,6 +8,14 @@ interface ImageItem {
 type ThumbnailOrientation = 'landscape' | 'portrait' | 'square';
 type WheelMode = 'zoom' | 'navigate';
 
+// How an image is scaled when it first opens.
+//   fit-down — fit the window without enlarging small images (current default)
+//   fit      — fit the window, enlarging small images to fill it
+//   height   — scale so the image height fills the window (width may overflow)
+//   width    — scale so the image width fills the window (height may overflow)
+//   actual   — show at 100% (natural pixel size)
+type DefaultZoom = 'fit-down' | 'fit' | 'height' | 'width' | 'actual';
+
 interface ImageViewerSettings {
 	showThumbnails: boolean;
 	thumbnailHeight: number;
@@ -15,6 +23,7 @@ interface ImageViewerSettings {
 	centerThumbnails: boolean;
 	showArrows: boolean;
 	wheelMode: WheelMode;
+	defaultZoom: DefaultZoom;
 	backdropOpacity: number;
 	minZoom: number;
 	maxZoom: number;
@@ -31,6 +40,7 @@ const DEFAULT_SETTINGS: ImageViewerSettings = {
 	centerThumbnails: false,
 	showArrows: true,
 	wheelMode: 'zoom',
+	defaultZoom: 'fit-down',
 	backdropOpacity: 0.92,
 	minZoom: 0.2,
 	maxZoom: 12,
@@ -40,8 +50,6 @@ const DEFAULT_SETTINGS: ImageViewerSettings = {
 	closeOnBackdropClick: true,
 };
 
-// The image is "fitted" at scale 1; below that it shrinks, above it enlarges.
-const FIT_SCALE = 1;
 // Thumbnails keep a fixed ~4:3 aspect so they all look uniform.
 const THUMB_ASPECT = 84 / 64;
 
@@ -124,10 +132,15 @@ class ImageViewer {
 	private nextBtn!: HTMLButtonElement;
 	private readonly thumbs: HTMLElement[] = [];
 
-	// Zoom / pan state for the current image.
+	// Zoom / pan state for the current image. `scale` is the absolute transform
+	// scale applied to the image's natural size; `baseScale` is the scale chosen
+	// by the default-zoom mode (the "home" zoom we reset to).
 	private scale = 1;
+	private baseScale = 1;
 	private tx = 0;
 	private ty = 0;
+	private pannable = false;
+	private firstRender = true;
 
 	// Accumulates wheel delta so one "notch" advances one image (trackpad-friendly).
 	private wheelAccum = 0;
@@ -197,6 +210,8 @@ class ImageViewer {
 		this.stage = overlay.createDiv({ cls: 'image-viewer-stage' });
 		this.mainImg = this.stage.createEl('img', { cls: 'image-viewer-main' });
 		this.mainImg.draggable = false;
+		// Natural size is only known once the image has loaded.
+		this.mainImg.addEventListener('load', this.onImageLoad);
 
 		this.prevBtn = this.stage.createEl('button', {
 			cls: 'image-viewer-btn image-viewer-nav image-viewer-prev',
@@ -241,6 +256,7 @@ class ImageViewer {
 		document.removeEventListener('keydown', this.onKeyDown, true);
 		document.removeEventListener('mousemove', this.onMouseMove);
 		document.removeEventListener('mouseup', this.onMouseUp);
+		window.removeEventListener('resize', this.onResize);
 
 		this.overlay?.remove();
 		this.overlay = null;
@@ -251,6 +267,7 @@ class ImageViewer {
 		document.addEventListener('keydown', this.onKeyDown, true);
 		document.addEventListener('mousemove', this.onMouseMove);
 		document.addEventListener('mouseup', this.onMouseUp);
+		window.addEventListener('resize', this.onResize);
 
 		this.stage.addEventListener('wheel', this.onWheel, { passive: false });
 		this.stage.addEventListener('mousedown', this.onMouseDown);
@@ -261,10 +278,10 @@ class ImageViewer {
 			if (e.target === this.stage && !this.moved) this.close();
 		});
 
-		// Double click toggles between fit and 2x zoom.
+		// Double click toggles between the default zoom and 2x.
 		this.mainImg.addEventListener('dblclick', (e) => {
 			e.preventDefault();
-			if (this.scale !== FIT_SCALE) this.resetZoom();
+			if (Math.abs(this.scale - this.baseScale) > 1e-3) this.resetToBase();
 			else this.applyZoom(2, 0, 0);
 		});
 
@@ -306,7 +323,7 @@ class ImageViewer {
 				break;
 			case '0':
 				e.preventDefault();
-				this.resetZoom();
+				this.resetToBase();
 				break;
 		}
 	};
@@ -356,7 +373,7 @@ class ImageViewer {
 		const dx = e.clientX - this.panStartX;
 		const dy = e.clientY - this.panStartY;
 		if (Math.abs(dx) > 3 || Math.abs(dy) > 3) this.moved = true;
-		if (this.scale > FIT_SCALE) {
+		if (this.pannable) {
 			this.tx = this.panOriginX + dx;
 			this.ty = this.panOriginY + dy;
 			this.updateTransform();
@@ -368,31 +385,86 @@ class ImageViewer {
 	};
 
 	private applyZoom(factor: number, mx: number, my: number): void {
-		const newScale = clamp(this.scale * factor, this.settings.minZoom, this.settings.maxZoom);
+		// Zoom limits are expressed relative to the default ("base") zoom.
+		const minScale = this.baseScale * this.settings.minZoom;
+		const maxScale = this.baseScale * this.settings.maxZoom;
+		const newScale = clamp(this.scale * factor, minScale, maxScale);
 		const ratio = newScale / this.scale;
 		// Keep the point under the cursor fixed while zooming.
 		this.tx = mx - (mx - this.tx) * ratio;
 		this.ty = my - (my - this.ty) * ratio;
 		this.scale = newScale;
-		// At or below the fitted size the image stays centered (no panning needed).
-		if (this.scale <= FIT_SCALE) {
-			this.tx = 0;
-			this.ty = 0;
-		}
 		this.updateTransform();
 	}
 
-	private resetZoom(): void {
-		this.scale = 1;
+	// Compute the "home" scale for the current image from its natural size,
+	// the stage size and the configured default-zoom mode.
+	private computeBaseScale(): void {
+		const sw = this.stage.clientWidth;
+		const sh = this.stage.clientHeight;
+		const iw = this.mainImg.naturalWidth;
+		const ih = this.mainImg.naturalHeight;
+		if (!sw || !sh || !iw || !ih) {
+			this.baseScale = 1;
+			return;
+		}
+		switch (this.settings.defaultZoom) {
+			case 'actual':
+				this.baseScale = 1;
+				break;
+			case 'width':
+				this.baseScale = sw / iw;
+				break;
+			case 'height':
+				this.baseScale = sh / ih;
+				break;
+			case 'fit':
+				this.baseScale = Math.min(sw / iw, sh / ih);
+				break;
+			default: // 'fit-down' — never enlarge beyond natural size
+				this.baseScale = Math.min(1, sw / iw, sh / ih);
+		}
+	}
+
+	private resetToBase(): void {
+		this.scale = this.baseScale;
 		this.tx = 0;
 		this.ty = 0;
 		this.updateTransform();
 	}
 
 	private updateTransform(): void {
+		// The image overflows the stage (and is therefore pannable) when its
+		// rendered size exceeds the stage in either dimension.
+		const rw = this.mainImg.naturalWidth * this.scale;
+		const rh = this.mainImg.naturalHeight * this.scale;
+		this.pannable =
+			rw > this.stage.clientWidth + 1 || rh > this.stage.clientHeight + 1;
+		if (!this.pannable) {
+			this.tx = 0;
+			this.ty = 0;
+		}
 		this.mainImg.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
-		this.mainImg.toggleClass('is-zoomed', this.scale > FIT_SCALE);
+		this.mainImg.toggleClass('is-zoomed', this.pannable);
 	}
+
+	private onImageLoad = (): void => {
+		this.computeBaseScale();
+		// Preserve the current zoom across images only when asked (and never on
+		// the very first image, which has no prior zoom to keep).
+		if (this.settings.keepZoom && !this.firstRender) {
+			this.updateTransform();
+		} else {
+			this.resetToBase();
+		}
+		this.firstRender = false;
+	};
+
+	private onResize = (): void => {
+		// Refit the current image to the new window size.
+		this.computeBaseScale();
+		this.resetToBase();
+	};
 
 	private goTo(index: number): void {
 		const count = this.items.length;
@@ -416,12 +488,11 @@ class ImageViewer {
 		const item = this.items[this.index];
 		if (!item) return;
 
-		// Keep the current zoom/pan across images when requested.
-		if (this.settings.keepZoom) this.updateTransform();
-		else this.resetZoom();
-		this.mainImg.src = item.src;
 		this.mainImg.alt = item.alt;
+		this.mainImg.src = item.src;
 		this.counterEl.setText(`${this.index + 1} / ${this.items.length}`);
+		// Cached images may not fire 'load', so apply the default zoom right away.
+		if (this.mainImg.complete && this.mainImg.naturalWidth) this.onImageLoad();
 
 		// Without looping, disable the arrows at the ends.
 		if (!this.settings.loop) {
@@ -527,6 +598,23 @@ class ImageViewerSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName('Default zoom')
+			.setDesc('How an image is scaled when it first opens.')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption('fit-down', 'Fit window (no upscaling)')
+					.addOption('fit', 'Fit window (maximize)')
+					.addOption('height', 'Fill height')
+					.addOption('width', 'Fill width')
+					.addOption('actual', 'Actual size (100%)')
+					.setValue(this.plugin.settings.defaultZoom)
+					.onChange(async (value) => {
+						this.plugin.settings.defaultZoom = value as DefaultZoom;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
 			.setName('Keep zoom between images')
 			.setDesc('Preserve the current zoom level and position when switching images.')
 			.addToggle((toggle) =>
@@ -572,7 +660,7 @@ class ImageViewerSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Minimum zoom')
-			.setDesc('Lower limit for zoom — values below 1.0 let you shrink below the fitted size.')
+			.setDesc('Lower limit for zoom — values below 1.0 let you shrink below the default size.')
 			.addSlider((slider) =>
 				slider
 					.setLimits(0.1, 1, 0.05)
@@ -586,7 +674,7 @@ class ImageViewerSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Maximum zoom')
-			.setDesc('Upper limit for mouse-wheel zoom (× the fitted size).')
+			.setDesc('Upper limit for mouse-wheel zoom (× the default size).')
 			.addSlider((slider) =>
 				slider
 					.setLimits(2, 20, 1)

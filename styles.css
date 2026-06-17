@@ -59,9 +59,10 @@
 }
 
 .image-viewer-main {
-	max-width: 100%;
-	max-height: 100%;
-	object-fit: contain;
+	/* Rendered at natural size; all scaling is done via the CSS transform. */
+	flex: 0 0 auto;
+	max-width: none;
+	max-height: none;
 	transform-origin: center center;
 	cursor: zoom-in;
 	will-change: transform;
