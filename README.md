@@ -4,6 +4,8 @@
 
 Click an image in a note to open it in a full-window viewer that fills the whole Obsidian window.
 
+![Image Viewer](images/example.webp)
+
 ## Features
 
 - **Full-window viewing** — the image is scaled automatically to fit the window.
